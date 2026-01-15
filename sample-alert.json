@@ -1,0 +1,36 @@
+{
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "MaxwellScrapeNoUpdate",
+        "severity": "warning",
+        "instance": "maxwell-01",
+        "service": "maxwell",
+        "namespace": "default"
+      },
+      "annotations": {
+        "summary": "Maxwell 采集时间戳无更新",
+        "description": "Maxwell scrape timestamp 未在 2 分钟内更新"
+      },
+      "startsAt": "2026-01-15T13:30:00+08:00",
+      "endsAt": ""
+    },
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "KafkaConsumerLagHigh",
+        "severity": "critical",
+        "instance": "kafka-01",
+        "service": "kafka-consumer",
+        "namespace": "default"
+      },
+      "annotations": {
+        "summary": "消费者堆积恢复",
+        "description": "Topic consumer lag 已恢复正常"
+      },
+      "startsAt": "2026-01-15T12:50:00+08:00",
+      "endsAt": "2026-01-15T13:10:00+08:00"
+    }
+  ]
+}
