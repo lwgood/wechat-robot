@@ -3,6 +3,7 @@
 轻量化企业微信告警 Alertmanager webhook 并发送 Markdown 告警。
 
 ### 整体架构
+```text
 Alertmanager
     |
     | HTTP POST (Webhook)
@@ -12,15 +13,13 @@ wechat-robot (:8080)
     | HTTPS POST
     v
 企业微信群机器人
+```
 
 ### 环境变量
 
 | 变量名          | 是否必须 | 说明                              |
 | ------------ | ---- | ------------------------------- |
 | `WEBHOOK_ID` | 否    | 企业微信机器人 webhook key，不设置则使用内置默认值 |
-
-### 健康检查
-curl http://localhost:8080/healthz
 
 ### 运行方式
 ```bash
@@ -46,6 +45,9 @@ services:
       - "8080:8080"
     # volumes:
     #   - ./templates:/app/templates:ro
+
+# 健康检查
+curl http://localhost:8080/healthz
 ```
 
 ### Alertmanager 配置示例
@@ -55,9 +57,8 @@ receivers:
   webhook_configs:
   - url: http://wechat-robot:8080/wechat-robot/send?key=0dee1696-5e24-4830-afab-8cce0b64d866  # webhook_id 可选，如果未指定则为默认值: 0dee1696-5e24-4830-afab-8cce0b64d866 
     send_resolved: true
-```
-  
-### 路由示例
+
+# 路由示例
 route:
   receiver: wechat-robot
   group_by: ['alertname']
@@ -68,9 +69,12 @@ route:
   - matchers:
     - severity="critical"
     receiver: wechat-robot
+```
 
 ### 测试
+```bash
 curl -X POST \
   -H "Content-Type: application/json" \
   --data @sample-alert.json \
   http://localhost:8080/wechat-robot/send?key=0dee1696-5e24-4830-afab-8cce0b64d866
+```
