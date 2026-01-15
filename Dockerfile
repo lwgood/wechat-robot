@@ -16,10 +16,10 @@ FROM alpine:3.18
 
 WORKDIR /app
 
-RUN apk add --no-cache curl net-tools busybox-extras ca-certificates tzdata \&& \
-    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
-    echo "Asia/Shanghai" > /etc/timezone && \
-    update-ca-certificates 2>/dev/null || true
+RUN apk add --no-cache curl net-tools busybox-extras ca-certificates tzdata \
+    && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && echo "Asia/Shanghai" > /etc/timezone \
+    && update-ca-certificates 2>/dev/null || true
 
 COPY --from=build /app/wechat-robot .
 COPY --from=build /app/templates ./templates
