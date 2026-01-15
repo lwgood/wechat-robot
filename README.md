@@ -45,8 +45,10 @@ services:
       - "8080:8080"
     # volumes:
     #   - ./templates:/app/templates:ro
+```
 
-# 健康检查
+### 健康检查
+```bash
 curl http://localhost:8080/healthz
 ```
 
