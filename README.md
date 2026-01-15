@@ -35,7 +35,7 @@ version: "3.8"
 
 services:
   wechat-robot:
-    image: registry.cn-hangzhou.aliyuncs.com/basex/wechat-robot:1.0.4
+    image: registry.cn-hangzhou.aliyuncs.com/basex/wechat-robot:v1.0.4
     container_name: wechat-robot
     restart: unless-stopped
     user: "0"
