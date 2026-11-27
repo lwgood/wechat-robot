@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -28,7 +29,26 @@ type wechatMessage struct {
 	} `json:"markdown"`
 }
 
-// WechatHandler forwards an Alertmanager-rendered WeChat markdown message.
+type alert struct {
+	Status      string            `json:"status"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	StartsAt    string            `json:"startsAt"`
+	EndsAt      string            `json:"endsAt"`
+}
+
+type webhookPayload struct {
+	Alerts []alert `json:"alerts"`
+}
+
+type templateData struct {
+	Alerts struct {
+		Firing   []alert
+		Resolved []alert
+	}
+}
+
+// WechatHandler renders an Alertmanager webhook and forwards it to WeChat.
 func WechatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "only POST supported", http.StatusMethodNotAllowed)
@@ -55,13 +75,48 @@ func WechatHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	var message wechatMessage
-	if err := json.Unmarshal(body, &message); err != nil {
-		http.Error(w, "invalid WeChat message JSON", http.StatusBadRequest)
+	var payload webhookPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		http.Error(w, "invalid Alertmanager payload", http.StatusBadRequest)
 		return
 	}
-	if message.MsgType != "markdown" || strings.TrimSpace(message.Markdown.Content) == "" {
-		http.Error(w, "expected a non-empty markdown message", http.StatusBadRequest)
+	if len(payload.Alerts) == 0 {
+		http.Error(w, "payload contains no alerts", http.StatusBadRequest)
+		return
+	}
+
+	var data templateData
+	for _, alert := range payload.Alerts {
+		switch alert.Status {
+		case "firing":
+			data.Alerts.Firing = append(data.Alerts.Firing, alert)
+		case "resolved":
+			data.Alerts.Resolved = append(data.Alerts.Resolved, alert)
+		}
+	}
+	if len(data.Alerts.Firing)+len(data.Alerts.Resolved) == 0 {
+		http.Error(w, "payload contains no firing or resolved alerts", http.StatusBadRequest)
+		return
+	}
+
+	tmpl, err := template.ParseFiles("templates/wechat.tmpl")
+	if err != nil {
+		log.Printf("parse WeChat template failed: %v", err)
+		http.Error(w, "failed to load message template", http.StatusInternalServerError)
+		return
+	}
+	var content bytes.Buffer
+	if err := tmpl.Execute(&content, data); err != nil {
+		log.Printf("render WeChat template failed: %v", err)
+		http.Error(w, "failed to render alert message", http.StatusInternalServerError)
+		return
+	}
+	message := wechatMessage{MsgType: "markdown"}
+	message.Markdown.Content = content.String()
+	wechatBody, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("encode WeChat message failed: %v", err)
+		http.Error(w, "failed to encode alert message", http.StatusInternalServerError)
 		return
 	}
 
@@ -76,7 +131,7 @@ func WechatHandler(w http.ResponseWriter, r *http.Request) {
 
 	var lastStatus int
 	for attempt := 1; attempt <= 3; attempt++ {
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, wechatURL.String(), bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, wechatURL.String(), bytes.NewReader(wechatBody))
 		if err != nil {
 			log.Print("create WeChat request failed")
 			break

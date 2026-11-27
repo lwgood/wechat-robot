@@ -1,6 +1,6 @@
 # Wechat Robot
 
-Alertmanager 企业微信机器人转发服务。
+Alertmanager v0.24.0 企业微信机器人告警转发服务。由于 v0.24.0 的 webhook 不支持自定义 payload，本服务使用挂载到 `/app/templates/wechat.tmpl` 的模板，将标准 Alertmanager 告警渲染为企微 Markdown，再转发给群机器人。
 
 ```text
 Alertmanager
@@ -21,6 +21,7 @@ docker build -t wechat-robot:1.0.0 .
 
 docker run -d --name wechat-robot -p 8080:8080 \
   -e WEBHOOK_ID=your_webhook_key \
+  -v "$PWD/templates:/app/templates:ro" \
   wechat-robot:1.0.0
 ```
 
@@ -34,27 +35,29 @@ docker run -d --name wechat-robot -p 8080:8080 \
 ## Alertmanager 配置
 
 ```yaml
-templates:
-  - /etc/alertmanager/templates/wechat.tmpl
-
 receivers:
 - name: wechat-robot
   webhook_configs:
   - url: http://wechat-robot:8080/wechat-robot/send
     send_resolved: true
-    payload:
-      msgtype: markdown
-      markdown:
-        content: '{{ template "wechat.tmpl" . }}'
 
 route:
   receiver: wechat-robot
   group_by: ['alertname']
   group_wait: 30s
   group_interval: 5m
-  repeat_interval: 4h
+  repeat_interval: 1h
   routes:
-  - matchers:
+  - receiver: wechat-robot
+    matchers:
     - severity="critical"
-    receiver: wechat-robot
+    group_wait: 5m
+    group_interval: 10m
+    repeat_interval: 30m
+  - receiver: wechat-robot
+    matchers:
+    - severity="warning"
+    group_wait: 5m
+    group_interval: 10m
+    repeat_interval: 6h
 ```
