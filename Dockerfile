@@ -1,4 +1,4 @@
-FROM golang:1.20-alpine AS build
+FROM harbor-vpc.diact.com/library/golang:1.20-alpine AS build
 
 WORKDIR /app
 
@@ -10,7 +10,7 @@ COPY api/ ./api/
 
 RUN go build -o wechat-robot main.go
 
-FROM alpine:3.18
+FROM harbor-vpc.diact.com/library/alpine:3.18
 
 WORKDIR /app
 
