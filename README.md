@@ -1,8 +1,7 @@
 # Wechat Robot
 
-轻量化企业微信告警 Alertmanager webhook 并发送 Markdown 告警。
+Alertmanager 企业微信机器人转发服务。
 
-### 整体架构
 ```text
 Alertmanager
     |
@@ -15,52 +14,39 @@ wechat-robot (:8080)
 企业微信群机器人
 ```
 
-### 环境变量
+## Build & Start
+
+```bash
+docker build -t wechat-robot:1.0.0 .
+
+docker run -d --name wechat-robot -p 8080:8080 \
+  -e WEBHOOK_ID=your_webhook_key \
+  wechat-robot:1.0.0
+```
+
+## 环境变量
 
 | 变量名          | 是否必须 | 说明                              |
 | ------------ | ---- | ------------------------------- |
-| `WEBHOOK_ID` | 否    | 企业微信机器人 webhook key，不设置则使用内置默认值 |
+| `WEBHOOK_ID` | 是    | 企业微信群机器人的 webhook key；也可通过请求 URL 的 `key` 参数单次覆盖 |
 
-### 运行方式
-```bash
-# docker 
-docker run -d \
-  -p 8080:8080 \
-  -e WEBHOOK_ID=0dee1696-5e24-4830-afab-8cce0b64d866 \
-  --name wechat-robot \
-  wechat-robot:v1.0.4
 
-# docker-compose
-version: "3.8"
+## Alertmanager 配置
 
-services:
-  wechat-robot:
-    image: registry.cn-hangzhou.aliyuncs.com/basex/wechat-robot:v1.0.4
-    container_name: wechat-robot
-    restart: unless-stopped
-    user: "0"
-    environment:
-      WEBHOOK_ID: "0dee1696-5e24-4830-afab-8cce0b64d866"
-    ports:
-      - "8080:8080"
-    # volumes:
-    #   - ./templates:/app/templates:ro
-```
-
-### 健康检查
-```bash
-curl http://localhost:8080/healthz
-```
-
-### Alertmanager 配置示例
 ```yaml
+templates:
+  - /etc/alertmanager/templates/wechat.tmpl
+
 receivers:
 - name: wechat-robot
   webhook_configs:
-  - url: http://wechat-robot:8080/wechat-robot/send?key=0dee1696-5e24-4830-afab-8cce0b64d866  # webhook_id 可选，如果未指定则为默认值: 0dee1696-5e24-4830-afab-8cce0b64d866 
+  - url: http://wechat-robot:8080/wechat-robot/send
     send_resolved: true
+    payload:
+      msgtype: markdown
+      markdown:
+        content: '{{ template "wechat.tmpl" . }}'
 
-# 路由示例
 route:
   receiver: wechat-robot
   group_by: ['alertname']
@@ -71,12 +57,4 @@ route:
   - matchers:
     - severity="critical"
     receiver: wechat-robot
-```
-
-### 测试
-```bash
-curl -X POST \
-  -H "Content-Type: application/json" \
-  --data @sample-alert.json \
-  http://localhost:8080/wechat-robot/send?key=0dee1696-5e24-4830-afab-8cce0b64d866
 ```

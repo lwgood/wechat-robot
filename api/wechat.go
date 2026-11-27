@@ -3,15 +3,32 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
-	"text/template"
+	"strings"
 	"time"
-
-	"wechat-robot/model"
 )
 
+const (
+	maxPayloadSize  = 1 << 20
+	maxResponseSize = 1 << 20
+	wechatEndpoint  = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+)
+
+var wechatClient = &http.Client{Timeout: 5 * time.Second}
+
+type wechatMessage struct {
+	MsgType string `json:"msgtype"`
+	Markdown struct {
+		Content string `json:"content"`
+	} `json:"markdown"`
+}
+
+// WechatHandler forwards an Alertmanager-rendered WeChat markdown message.
 func WechatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "only POST supported", http.StatusMethodNotAllowed)
@@ -19,112 +36,103 @@ func WechatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// 1. webhook key 优先级：
-	// URL query ?key=xxx > ENV WEBHOOK_ID > 默认值
-	webhookID := r.URL.Query().Get("key")
+	webhookID := strings.TrimSpace(r.URL.Query().Get("key"))
 	if webhookID == "" {
-		webhookID = os.Getenv("WEBHOOK_ID")
+		webhookID = strings.TrimSpace(os.Getenv("WEBHOOK_ID"))
 	}
 	if webhookID == "" {
-		webhookID = "0dee1696-5e24-4830-afab-8cce0b64d866"
-	}
-
-	// 2. 企业微信官方 Webhook 地址（固定）
-	wechatURL := "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + webhookID
-
-	// 3. 解析 Alertmanager payload
-	var payload model.WebhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.Printf("decode payload failed: %v", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "webhook key is not configured", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("received %d alerts", len(payload.Alerts))
-
-	// 4. 构建模板视图
-	type View struct {
-		Alerts struct {
-			Firing   []model.Alert
-			Resolved []model.Alert
-		}
-	}
-
-	var view View
-	for _, a := range payload.Alerts {
-		if a.Status == "firing" {
-			view.Alerts.Firing = append(view.Alerts.Firing, a)
-		} else if a.Status == "resolved" {
-			view.Alerts.Resolved = append(view.Alerts.Resolved, a)
-		}
-	}
-
-	// 5. 渲染模板
-	tmpl, err := template.ParseFiles("templates/wechat.tmpl")
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPayloadSize))
 	if err != nil {
-		log.Printf("template parse error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
+		return
+	}
+	var message wechatMessage
+	if err := json.Unmarshal(body, &message); err != nil {
+		http.Error(w, "invalid WeChat message JSON", http.StatusBadRequest)
+		return
+	}
+	if message.MsgType != "markdown" || strings.TrimSpace(message.Markdown.Content) == "" {
+		http.Error(w, "expected a non-empty markdown message", http.StatusBadRequest)
 		return
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, view); err != nil {
-		log.Printf("template execute error: %v", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	wechatURL, err := url.Parse(wechatEndpoint)
+	if err != nil {
+		http.Error(w, "failed to configure webhook", http.StatusInternalServerError)
 		return
 	}
+	query := wechatURL.Query()
+	query.Set("key", webhookID)
+	wechatURL.RawQuery = query.Encode()
 
-	// 6. 构造企业微信消息体
-	body := map[string]interface{}{
-		"msgtype": "markdown",
-		"markdown": map[string]string{
-			"content": buf.String(),
-		},
-	}
-
-	b, _ := json.Marshal(body)
-
-	// 7. 超时 + 重试（最小实现）
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-	}
-
-	var lastErr error
-	for i := 1; i <= 3; i++ {
-		req, err := http.NewRequest(http.MethodPost, wechatURL, bytes.NewReader(b))
+	var lastStatus int
+	for attempt := 1; attempt <= 3; attempt++ {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, wechatURL.String(), bytes.NewReader(body))
 		if err != nil {
-			lastErr = err
-			log.Printf("create request failed: %v", err)
+			log.Print("create WeChat request failed")
 			break
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := client.Do(req)
+		resp, err := wechatClient.Do(req)
 		if err == nil {
+			lastStatus = resp.StatusCode
+			responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 			_ = resp.Body.Close()
-			log.Printf("sent alerts to wechat, status=%s", resp.Status)
-			respondOK(w)
-			return
+			if readErr == nil && len(responseBody) <= maxResponseSize && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				var result struct {
+					ErrCode int `json:"errcode"`
+				}
+				if json.Unmarshal(responseBody, &result) == nil && result.ErrCode == 0 {
+					respondOK(w)
+					return
+				}
+			}
 		}
 
-		lastErr = err
-		log.Printf("wechat send failed (retry %d/3): %v", i, err)
-		time.Sleep(time.Duration(i) * time.Second)
+		// Do not log the upstream error: the request URL contains the bot key.
+		log.Printf("WeChat delivery failed (attempt %d/3)", attempt)
+		if attempt < 3 {
+			timer := time.NewTimer(time.Duration(attempt) * time.Second)
+			select {
+			case <-r.Context().Done():
+				timer.Stop()
+				http.Error(w, "request canceled", http.StatusRequestTimeout)
+				return
+			case <-timer.C:
+			}
+		}
 	}
 
-	log.Printf("wechat send finally failed: %v", lastErr)
-	respondOK(w)
+	if lastStatus != 0 {
+		log.Printf("WeChat delivery failed after retries (HTTP status %d)", lastStatus)
+	}
+	http.Error(w, "failed to deliver alert to WeChat", http.StatusBadGateway)
 }
 
-// 统一成功响应，避免 Alertmanager hang
 func respondOK(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// 健康检查
 func HealthzHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "only GET supported", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	if r.Method == http.MethodGet {
+		_, _ = w.Write([]byte("ok"))
+	}
 }
