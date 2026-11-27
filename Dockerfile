@@ -8,7 +8,7 @@ RUN go mod download
 COPY main.go .
 COPY api/ ./api/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o wechat-robot .
+RUN go build -o wechat-robot main.go
 
 FROM alpine:3.18
 
